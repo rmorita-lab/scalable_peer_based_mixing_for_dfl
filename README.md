@@ -58,10 +58,10 @@ pip install -r ./node/requirements.txt
 ### 6. Start the FastAPI backend
 
 ```bash
-uvicorn manager.app:app --host 127.0.0.1 --port 8000 --timeout-keep-alive 60
+uvicorn manager.app:app --host 0.0.0.0 --port 8000 --timeout-keep-alive 60
 ```
 
-Backend listens on `http://127.0.0.1:8000`. The React frontend and the experiment runners reach it directly over HTTP.
+Backend listens on `http://0.0.0.0:8000` (accessible locally and remotely over LAN). The React frontend and the experiment runners reach it directly over HTTP.
 
 ### 7. Install Node.js and set up the React frontend
 

@@ -1,8 +1,8 @@
 import { useState, useCallback, useMemo } from 'react';
 import { getDefaultConfig, validateConfig, CONFIG_SCHEMA } from '../models/configModels';
 
-export function useExperimentConfig() {
-  const [config, setConfig] = useState(getDefaultConfig);
+export function useExperimentConfig(initialOverrides = {}) {
+  const [config, setConfig] = useState(() => getDefaultConfig(initialOverrides));
   const [errors, setErrors] = useState({});
 
   const updateConfig = useCallback((key, value) => {
@@ -26,7 +26,7 @@ export function useExperimentConfig() {
 
   // coerce form strings to the types the backend expects
   const getConfigForSubmit = useCallback(() => {
-    const merged = { ...getDefaultConfig(), ...config };
+    const merged = { ...getDefaultConfig(initialOverrides), ...config };
     const result = {};
     Object.entries(merged).forEach(([key, value]) => {
       const schema = CONFIG_SCHEMA[key];
@@ -35,12 +35,14 @@ export function useExperimentConfig() {
         result[key] = parseInt(value, 10);
       } else if (schema.type === 'float') {
         result[key] = parseFloat(value);
+      } else if (schema.type === 'bool') {
+        result[key] = Boolean(value);
       } else {
         result[key] = value;
       }
     });
     return result;
-  }, [config]);
+  }, [config, initialOverrides]);
 
   return { config, errors, isValid, updateConfig, getConfigForSubmit };
 }

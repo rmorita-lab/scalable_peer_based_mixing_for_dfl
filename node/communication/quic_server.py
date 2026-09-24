@@ -399,7 +399,7 @@ class QuicServer:
         stream_id = protocol._quic.get_next_available_stream_id(is_unidirectional=True)
         if moq_header is not None:
             framed = frame_message(moq_header, message)
-        else:
+        elif ConfigStore.moq_enabled:
             default_hdr = MoQHeader(
                 namespace=TrackNamespace(("dfl", f"node_{self.node_id}")),
                 track_name="packet",
@@ -408,6 +408,8 @@ class QuicServer:
                 payload_length=len(message),
             )
             framed = frame_message(default_hdr, message)
+        else:
+            framed = struct.pack(">I", len(message)) + message
 
         protocol._quic.send_stream_data(stream_id, framed, end_stream=True)
         protocol.transmit()

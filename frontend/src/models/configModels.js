@@ -183,14 +183,20 @@ export const CONFIG_SCHEMA = {
     label: 'Early-Exiting Nodes',
     section: 'network',
   },
+  moq_enabled: {
+    default: false,
+    type: 'bool',
+    label: 'Media over QUIC (MoQ)',
+    section: 'network',
+  },
 };
 
-export function getDefaultConfig() {
+export function getDefaultConfig(initialOverrides = {}) {
   const config = {};
   Object.entries(CONFIG_SCHEMA).forEach(([key, schema]) => {
     config[key] = schema.default;
   });
-  return config;
+  return { ...config, ...initialOverrides };
 }
 
 function validateConfigValue(key, value) {

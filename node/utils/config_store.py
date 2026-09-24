@@ -112,6 +112,8 @@ class ConfigStore:
     topology: dict[int, list[int]] = _env_json_dict_required("TOPOLOGY")
     peer_endpoints: dict[int, tuple[str, int]] = _env_json_endpoints_required("PEER_ENDPOINTS")
 
+    moq_enabled: bool = _env("MOQ_ENABLED", False)
+
     cert_path: str = _env("CERT_PATH", "/config/certs")
 
     @classmethod

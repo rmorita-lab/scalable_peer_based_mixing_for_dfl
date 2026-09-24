@@ -50,6 +50,10 @@ class ExperimentConfig(BaseModel):
     cache_covers: bool = Field(default=True)
     max_cover_cache: int = Field(default=100)
     sphinx_body_len: int = Field(default=10240, ge=1024, le=32768)
+    moq_enabled: bool = Field(
+        default=False,
+        description="Enable Media over QUIC (MoQ) transport with hierarchical namespace prefixes",
+    )
 
     @model_validator(mode="after")
     def validate_topology_constraints(self):
@@ -142,4 +146,5 @@ class FullNodeConfig(ExperimentConfig):
             "N_BYZANTINE": str(self.n_byzantine),
             "ATTACK_NOISE_SIGMA": str(self.attack_noise_sigma),
             "PARTIAL_UPDATE_RATIO": str(self.partial_update_ratio),
+            "MOQ_ENABLED": str(self.moq_enabled).lower(),
         }

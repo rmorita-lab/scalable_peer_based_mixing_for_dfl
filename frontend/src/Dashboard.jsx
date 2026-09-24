@@ -14,6 +14,32 @@ import { createColorMap } from './utils/colors';
 import styles from './Dashboard.module.css';
 
 export default function Dashboard() {
+  const [currentPath, setCurrentPath] = useState(() =>
+    typeof window !== 'undefined' ? window.location.pathname : '/'
+  );
+
+  const isMoqMode = currentPath.startsWith('/moq');
+
+  // Listen to popstate (back/forward browser buttons)
+  React.useEffect(() => {
+    const handlePopState = () => {
+      setCurrentPath(window.location.pathname);
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
+
+  const navigateTo = (path) => {
+    if (typeof window !== 'undefined') {
+      window.history.pushState({}, '', path);
+      setCurrentPath(path);
+    }
+  };
+
+  const initialOverrides = React.useMemo(() => {
+    return isMoqMode ? { moq_enabled: true } : { moq_enabled: false };
+  }, [isMoqMode]);
+
   const [selectedMetrics, setSelectedMetrics] = useState([]);
   const { nodes, isRunning } = useNodeStatus();
   const { metrics, clearMetrics } = useMetricsStream();
@@ -23,7 +49,13 @@ export default function Dashboard() {
     isValid: isConfigValid,
     updateConfig,
     getConfigForSubmit,
-  } = useExperimentConfig();
+  } = useExperimentConfig(initialOverrides);
+
+  // Sync moq_enabled if path changes
+  React.useEffect(() => {
+    updateConfig('moq_enabled', isMoqMode);
+  }, [isMoqMode, updateConfig]);
+
   const { indicators, isLoading: indicatorsLoading } = useScenarioIndicators(config);
   const {
     nodeNames: indexedNodeNames,
@@ -81,6 +113,29 @@ export default function Dashboard() {
 
   return (
     <div className={styles.container}>
+      {/* Protocol Mode Navigation Tabs */}
+      <nav className={styles.navBar}>
+        <div className={styles.tabs}>
+          <button
+            type="button"
+            className={`${styles.tab} ${!isMoqMode ? styles.activeTab : ''}`}
+            onClick={() => navigateTo('/')}
+          >
+            Standard QUIC
+          </button>
+          <button
+            type="button"
+            className={`${styles.tab} ${isMoqMode ? styles.activeTab : ''}`}
+            onClick={() => navigateTo('/moq')}
+          >
+            Media over QUIC (MoQ)
+          </button>
+        </div>
+        <div style={{ fontSize: '12px', color: 'var(--color-text-muted)' }}>
+          URL: <code>{isMoqMode ? '/moq' : '/'}</code>
+        </div>
+      </nav>
+
       {controlsError && (
         <div className={styles.banner} onClick={clearError}>
           {controlsError}
@@ -88,7 +143,14 @@ export default function Dashboard() {
       )}
 
       <header className={styles.header}>
-        <h1 className={styles.title}>MixDfl</h1>
+        <div className={styles.titleArea}>
+          <h1 className={styles.title}>MixDfl</h1>
+          {isMoqMode ? (
+            <span className={`${styles.badge} ${styles.badgeMoq}`}>Media over QUIC (MoQ)</span>
+          ) : (
+            <span className={`${styles.badge} ${styles.badgeStandard}`}>Standard QUIC</span>
+          )}
+        </div>
         <div className={styles.controls}>
           <button
             className={`${styles.btn} ${styles.btnPrimary}`}
@@ -106,6 +168,37 @@ export default function Dashboard() {
           </button>
         </div>
       </header>
+
+      {/* MoQ Protocol Details Banner (Only in /moq mode) */}
+      {isMoqMode && (
+        <div className={styles.moqInfoCard}>
+          <div className={styles.moqInfoTitle}>
+            <span>⚡ MoQ Hierarchical Namespace Framing Active</span>
+          </div>
+          <div>
+            Packets are framed with MoQ headers following <code>moq-dev/moq</code> specifications,
+            enabling prefix-based routing, cache inspection, and group sequencing:
+          </div>
+          <div className={styles.moqInfoGrid}>
+            <div className={styles.moqInfoItem}>
+              <span className={styles.moqInfoKey}>Track Namespace: </span>
+              <span className={styles.moqInfoVal}>dfl/node_&#123;id&#125;/model_part</span>
+            </div>
+            <div className={styles.moqInfoItem}>
+              <span className={styles.moqInfoKey}>Track Name: </span>
+              <span className={styles.moqInfoVal}>weights</span>
+            </div>
+            <div className={styles.moqInfoItem}>
+              <span className={styles.moqInfoKey}>Group ID: </span>
+              <span className={styles.moqInfoVal}>round (varint)</span>
+            </div>
+            <div className={styles.moqInfoItem}>
+              <span className={styles.moqInfoKey}>Object ID: </span>
+              <span className={styles.moqInfoVal}>chunk_idx (varint)</span>
+            </div>
+          </div>
+        </div>
+      )}
 
       <ConfigPanel
         config={config}

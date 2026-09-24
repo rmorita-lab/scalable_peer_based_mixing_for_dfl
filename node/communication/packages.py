@@ -41,3 +41,30 @@ def deserialize_msg(msg: bytes) -> dict:
     if "type" in result and isinstance(result["type"], int):
         result["type"] = PackageType(result["type"])
     return result
+
+
+def make_moq_header(
+    msg: dict,
+    node_id: int,
+    payload_len: int,
+    priority: int = 0,
+):
+    """
+    Construct a MoQHeader with hierarchical namespace prefix corresponding to this message.
+    """
+    from communication.moq import create_dfl_header
+
+    pkg_type = msg.get("type", PackageType.MODEL_PART)
+    type_name = pkg_type.name if isinstance(pkg_type, PackageType) else str(pkg_type)
+    round_id = msg.get("round", 0)
+    chunk_idx = msg.get("part_idx", 0)
+
+    return create_dfl_header(
+        node_id=node_id,
+        package_type_name=type_name,
+        round_id=round_id,
+        chunk_idx=chunk_idx,
+        payload_length=payload_len,
+        priority=priority,
+    )
+

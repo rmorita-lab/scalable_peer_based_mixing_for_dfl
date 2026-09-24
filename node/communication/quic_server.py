@@ -12,22 +12,42 @@ from aioquic.quic.events import StreamDataReceived, ConnectionTerminated, Handsh
 from metrics.node_metrics import metrics, MetricField
 from utils.config_store import ConfigStore
 
+from communication.moq import (
+    MoQHeader,
+    TrackNamespace,
+    frame_message,
+    extract_frame,
+)
+
 QUIC_IDLE_TIMEOUT = 180.0
 RECONNECT_FAIL_LIMIT = 3
 
 
-def _extract_message_from_buffer(buffer: dict[int, bytes], event: StreamDataReceived) -> bytes | None:
+def _extract_message_from_buffer(
+    buffer: dict[int, bytes], event: StreamDataReceived
+) -> tuple[bytes, Optional[MoQHeader]] | None:
     stream_id = event.stream_id
     if stream_id not in buffer:
         buffer[stream_id] = b""
     buffer[stream_id] += event.data
 
     if event.end_stream:
-        message = buffer.pop(stream_id, b"")
-        if len(message) >= 4:
-            # first 4 bytes are prefix, the body afterwards
-            length = struct.unpack(">I", message[:4])[0]
-            return message[4:4 + length]
+        raw_stream_data = buffer.pop(stream_id, b"")
+        result = extract_frame(raw_stream_data)
+        if result is not None:
+            header, payload, _ = result
+            return payload, header
+        # Fallback for legacy 4-byte big-endian framing
+        if len(raw_stream_data) >= 4:
+            length = struct.unpack(">I", raw_stream_data[:4])[0]
+            fallback_hdr = MoQHeader(
+                namespace=TrackNamespace(("dfl", "legacy")),
+                track_name="packet",
+                group_id=0,
+                object_id=0,
+                payload_length=length,
+            )
+            return raw_stream_data[4 : 4 + length], fallback_hdr
     return None
 
 
@@ -107,10 +127,15 @@ class QuicServerProtocol(QuicConnectionProtocol):
                     self._server._spawn_reconnect_loop(self._peer_id)
 
     def _handle_stream_data(self, event: StreamDataReceived):
-        payload = _extract_message_from_buffer(self._buffer, event)
-        if payload:
+        extracted = _extract_message_from_buffer(self._buffer, event)
+        if extracted:
+            payload, moq_header = extracted
             asyncio.create_task(
-                self._server._handle_message(payload, self._peer_id if self._peer_id is not None else -1)
+                self._server._handle_message(
+                    payload,
+                    self._peer_id if self._peer_id is not None else -1,
+                    moq_header=moq_header,
+                )
             )
 
 
@@ -157,9 +182,16 @@ class QuicClientProtocol(QuicConnectionProtocol):
                 self._server._spawn_reconnect_loop(self._peer_id)
 
     def _handle_stream_data(self, event: StreamDataReceived):
-        payload = _extract_message_from_buffer(self._buffer, event)
-        if payload:
-            asyncio.create_task(self._server._handle_message(payload, self._peer_id))
+        extracted = _extract_message_from_buffer(self._buffer, event)
+        if extracted:
+            payload, moq_header = extracted
+            asyncio.create_task(
+                self._server._handle_message(
+                    payload,
+                    self._peer_id,
+                    moq_header=moq_header,
+                )
+            )
 
 
 class QuicServer:
@@ -337,16 +369,22 @@ class QuicServer:
         await self._connect_peer(peer_id, host, port)
         return self._connections.get(peer_id)
 
-    async def _handle_message(self, message: bytes, peer_id: int = -1):
+    async def _handle_message(
+        self, message: bytes, peer_id: int = -1, moq_header: Optional[MoQHeader] = None
+    ):
         try:
-            await self._packet_router.on_packet_received(data=message, peer_id=peer_id)
+            await self._packet_router.on_packet_received(
+                data=message, peer_id=peer_id, moq_header=moq_header
+            )
         except Exception as e:
             logging.exception(f"QuicServer: on_packet_received failed for peer {peer_id}: {e}")
 
     def is_shutting_down(self) -> bool:
         return self._peer_node is not None and self._peer_node._shutting_down
 
-    async def _send_raw(self, peer_id: int, message: bytes):
+    async def _send_raw(
+        self, peer_id: int, message: bytes, moq_header: Optional[MoQHeader] = None
+    ):
         if self._i_dial(peer_id):
             protocol = self._connections.get(peer_id)
             if protocol is None:
@@ -359,16 +397,28 @@ class QuicServer:
                 raise ConnectionError(f"No inbound connection from peer {peer_id}")
 
         stream_id = protocol._quic.get_next_available_stream_id(is_unidirectional=True)
-        framed = struct.pack(">I", len(message)) + message
+        if moq_header is not None:
+            framed = frame_message(moq_header, message)
+        else:
+            default_hdr = MoQHeader(
+                namespace=TrackNamespace(("dfl", f"node_{self.node_id}")),
+                track_name="packet",
+                group_id=0,
+                object_id=0,
+                payload_length=len(message),
+            )
+            framed = frame_message(default_hdr, message)
 
         protocol._quic.send_stream_data(stream_id, framed, end_stream=True)
         protocol.transmit()
 
-    async def send_to_peer(self, peer_id: int, message: bytes):
+    async def send_to_peer(
+        self, peer_id: int, message: bytes, moq_header: Optional[MoQHeader] = None
+    ):
         if peer_id not in self.peers:
             return
         try:
-            await self._send_raw(peer_id, message)
+            await self._send_raw(peer_id, message, moq_header=moq_header)
             metrics().increment(MetricField.TOTAL_MSG_SENT)
             metrics().increment(MetricField.TOTAL_MBYTES_SENT, len(message) / 1048576)
         except Exception as e:

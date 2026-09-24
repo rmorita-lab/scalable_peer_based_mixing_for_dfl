@@ -34,9 +34,17 @@ class PacketRouter:
         self._sphinx_transport = sphinx_transport
 
     @log_exceptions
-    async def on_packet_received(self, data: bytes, peer_id: int) -> None:
+    async def on_packet_received(
+        self, data: bytes, peer_id: int, moq_header=None
+    ) -> None:
         metrics().increment(MetricField.TOTAL_MBYTES_RECEIVED, len(data) / 1048576)
         metrics().increment(MetricField.TOTAL_MSG_RECEIVED)
+
+        if moq_header is not None:
+            logging.debug(
+                f"PacketRouter: Received packet with MoQ prefix: {moq_header.namespace} "
+                f"track={moq_header.track_name} group={moq_header.group_id} obj={moq_header.object_id}"
+            )
 
         try:
             routing, header, delta, mac_key = await self._sphinx_router.process_incoming(data)

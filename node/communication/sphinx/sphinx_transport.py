@@ -181,14 +181,24 @@ class SphinxTransport:
         if ConfigStore.partial_update_ratio < 1.0 and peers:
             select_count = max(1, round(len(peers) * ConfigStore.partial_update_ratio))
             peers = secrets.SystemRandom().sample(peers, select_count)
-        round_id = message.get("round")
+        round_id = message.get("round", 0)
+        chunk_idx = message.get("part_idx", 0)
         payload = serialize_msg(message)
         for peer_id in peers:
             path, msg_bytes, timestamp_callback = await self.generate_path(
                 payload, peer_id, cover=False, serialize=False, round_id=round_id
             )
+            from communication.moq import create_dfl_header
+
+            moq_hdr = create_dfl_header(
+                node_id=self._node_id,
+                package_type_name="model_part",
+                round_id=round_id,
+                chunk_idx=chunk_idx,
+                payload_length=len(msg_bytes),
+            )
             update_metrics_task = partial(metrics().increment, MetricField.FRAGMENTS_SENT)
-            send_msg_task = partial(self.send, path, msg_bytes, timestamp_callback)
+            send_msg_task = partial(self.send, path, msg_bytes, timestamp_callback, moq_header=moq_hdr)
             await self._mixer.queue_item(send_msg_task, update_metrics_task, next_hop=path[0])
         return len(peers)
 
@@ -204,13 +214,22 @@ class SphinxTransport:
         return path, msg_bytes, timestamp_callback
 
     @log_exceptions
-    async def send(self, path, msg_bytes, timestamp_callback):
+    async def send(self, path, msg_bytes, timestamp_callback, moq_header=None):
         if timestamp_callback is not None:
             timestamp_callback()
-        await self._peer.send_to_peer(path[0], msg_bytes)
+        await self._peer.send_to_peer(path[0], msg_bytes, moq_header=moq_header)
 
     async def on_forward_packet(self, next_hop: int, packet_data: bytes) -> None:
-        send_task = partial(self._peer.send_to_peer, next_hop, packet_data)
+        from communication.moq import MoQHeader, TrackNamespace
+
+        forward_hdr = MoQHeader(
+            namespace=TrackNamespace(("dfl", f"node_{self._node_id}", "relay")),
+            track_name="forward",
+            group_id=0,
+            object_id=0,
+            payload_length=len(packet_data),
+        )
+        send_task = partial(self._peer.send_to_peer, next_hop, packet_data, moq_header=forward_hdr)
         update_metrics_task = partial(metrics().increment, MetricField.FORWARDED)
         await self._mixer.queue_item(send_task, update_metrics_task, next_hop=next_hop)
 

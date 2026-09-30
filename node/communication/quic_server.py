@@ -3,6 +3,7 @@ import logging
 import os
 import secrets
 import struct
+from typing import Optional
 
 from aioquic.asyncio import connect, serve
 from aioquic.asyncio.protocol import QuicConnectionProtocol
@@ -33,21 +34,19 @@ def _extract_message_from_buffer(
 
     if event.end_stream:
         raw_stream_data = buffer.pop(stream_id, b"")
-        result = extract_frame(raw_stream_data)
-        if result is not None:
-            header, payload, _ = result
-            return payload, header
-        # Fallback for legacy 4-byte big-endian framing
-        if len(raw_stream_data) >= 4:
-            length = struct.unpack(">I", raw_stream_data[:4])[0]
-            fallback_hdr = MoQHeader(
-                namespace=TrackNamespace(("dfl", "legacy")),
-                track_name="packet",
-                group_id=0,
-                object_id=0,
-                payload_length=length,
+        if ConfigStore.moq_enabled:
+            result = extract_frame(raw_stream_data)
+            if result is not None:
+                header, payload, _ = result
+                return payload, header
+            logging.warning(
+                f"QuicServer: Failed to extract MoQ frame from stream {stream_id} (len={len(raw_stream_data)})"
             )
-            return raw_stream_data[4 : 4 + length], fallback_hdr
+            return None
+        else:
+            if len(raw_stream_data) >= 4:
+                length = struct.unpack(">I", raw_stream_data[:4])[0]
+                return raw_stream_data[4 : 4 + length], None
     return None
 
 

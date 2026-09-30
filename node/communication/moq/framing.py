@@ -6,10 +6,8 @@ and extracting frames from stream buffers.
 """
 
 from typing import Tuple, Optional
-import struct
 
-from communication.moq.header import MoQHeader, MOQ_OBJECT_STREAM_TYPE
-from communication.moq.namespace import TrackNamespace
+from communication.moq.header import MoQHeader
 
 
 def frame_message(header: MoQHeader, payload: bytes) -> bytes:
@@ -28,37 +26,26 @@ def extract_frame(data: bytes) -> Optional[Tuple[MoQHeader, bytes, int]]:
 
     Returns:
         tuple (MoQHeader, payload_bytes, total_bytes_consumed) if a full frame is available.
-        None if more bytes are needed (incomplete frame).
+        None if more bytes are needed (incomplete frame) or the header is malformed.
 
-    Also supports backward-compatibility fallback if data is in legacy 4-byte length prefix format.
+    NOTE: This function never falls back to legacy framing. Callers that need
+    legacy 4-byte length-prefix decoding must handle that separately, gated on
+    ConfigStore.moq_enabled being False.
     """
     if len(data) == 0:
         return None
 
-    # Try decoding MoQHeader
     try:
         header, header_len = MoQHeader.decode(data, 0)
-        total_len = header_len + header.payload_length
-        if len(data) >= total_len:
-            payload = data[header_len:total_len]
-            return header, payload, total_len
-        # Header decoded successfully, but waiting for full payload
+    except ValueError:
+        # Buffer underflow (partial data) or malformed MoQ header.
+        # Signal "need more data / discard" — do NOT fall through to any legacy path.
         return None
-    except Exception:
-        # Check for legacy 4-byte big-endian length prefix format
-        if len(data) >= 4:
-            legacy_len = struct.unpack(">I", data[:4])[0]
-            if len(data) >= 4 + legacy_len:
-                legacy_payload = data[4 : 4 + legacy_len]
-                # Synthesize a fallback MoQHeader for legacy packets
-                fallback_header = MoQHeader(
-                    namespace=TrackNamespace(("dfl", "legacy")),
-                    track_name="packet",
-                    group_id=0,
-                    object_id=0,
-                    payload_length=legacy_len,
-                    publisher_priority=0,
-                )
-                return fallback_header, legacy_payload, 4 + legacy_len
 
-    return None
+    total_len = header_len + header.payload_length
+    if len(data) < total_len:
+        # Header decoded successfully but payload hasn't fully arrived yet.
+        return None
+
+    payload = data[header_len:total_len]
+    return header, payload, total_len

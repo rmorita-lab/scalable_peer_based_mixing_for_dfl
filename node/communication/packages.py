@@ -8,6 +8,7 @@ class PackageType(Enum):
     MODEL_PART = 1
     COVER = 2
     PROBE = 3
+    FETCH_REQUEST = 4
 
 
 def format_probe_package(content):
@@ -26,6 +27,16 @@ def format_model_package(current_round, chunk_idx, chunk, n_chunks):
 
 def format_cover_package(content):
     return {"type": PackageType.COVER, "content": content}
+
+
+def format_fetch_request_package(round_id, part_idx, origin_node_id=None, is_resend=False):
+    return {
+        "type": PackageType.FETCH_REQUEST,
+        "round": round_id,
+        "part_idx": part_idx,
+        "origin_node_id": origin_node_id,
+        "is_resend": is_resend,
+    }
 
 
 def serialize_msg(msg) -> bytes:

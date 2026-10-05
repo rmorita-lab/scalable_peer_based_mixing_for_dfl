@@ -243,3 +243,92 @@ class SphinxTransport:
         send_task = partial(self._peer.send_to_peer, first_hop, msg_bytes)
         update_metrics_task = partial(metrics().increment, MetricField.SURB_REPLIED)
         await self._mixer.queue_item(send_task, update_metrics_task, next_hop=first_hop)
+
+    @log_exceptions
+    async def respond_from_cache(
+        self,
+        peer_id: int,
+        round_id: int,
+        part_idx: int,
+        origin_node_id: int | None = None,
+        is_resend: bool = False,
+    ) -> bool:
+        """
+        Respond to a peer request using cached parameters/fragments.
+        Unified handler for:
+        1. Resend requests (is_resend=True)
+        2. Parameter fetch requests for the same round and chunk (is_resend=False)
+
+        Returns True if cache hit and response sent, False if cache miss.
+        """
+        from communication.moq import get_moq_cache
+
+        req_type = "resend" if is_resend else "fetch"
+        entry = get_moq_cache().find_object(
+            round_id=round_id,
+            part_idx=part_idx,
+            origin_node_id=origin_node_id,
+        )
+
+        if entry is None:
+            logging.warning(
+                f"SphinxTransport[{self._node_id}]: MoQ Cache MISS [{req_type}] for round={round_id} "
+                f"part={part_idx} (origin={origin_node_id}) requested by peer {peer_id}"
+            )
+            return False
+
+        logging.info(
+            f"SphinxTransport[{self._node_id}]: MoQ Cache HIT [{req_type}]: Responding to peer {peer_id} "
+            f"with cached object {entry.key} ({len(entry.payload)} bytes)"
+        )
+
+        # Send cached payload directly with its original MoQ header
+        await self._peer.send_to_peer(
+            peer_id=peer_id,
+            message=entry.payload,
+            moq_header=entry.header,
+        )
+        metrics().increment(MetricField.FRAGMENTS_SENT)
+        return True
+
+    @log_exceptions
+    async def request_parameter_from_peer(
+        self,
+        peer_id: int,
+        round_id: int,
+        part_idx: int,
+        origin_node_id: int | None = None,
+        is_resend: bool = False,
+    ) -> None:
+        """
+        Send a parameter fetch or resend request to a peer.
+        Uses MoQ header with track_name='resend' or 'fetch' and a FETCH_REQUEST package.
+        """
+        from communication.packages import format_fetch_request_package, serialize_msg
+        from communication.moq import MoQHeader, TrackNamespace
+
+        req_type = "resend" if is_resend else "fetch"
+        payload_dict = format_fetch_request_package(
+            round_id=round_id,
+            part_idx=part_idx,
+            origin_node_id=origin_node_id,
+            is_resend=is_resend,
+        )
+        raw_payload = serialize_msg(payload_dict)
+
+        req_hdr = None
+        if ConfigStore.moq_enabled:
+            req_hdr = MoQHeader(
+                namespace=TrackNamespace(("dfl", f"node_{self._node_id}", req_type)),
+                track_name=req_type,
+                group_id=round_id,
+                object_id=part_idx,
+                payload_length=len(raw_payload),
+            )
+
+        logging.info(
+            f"SphinxTransport[{self._node_id}]: Sending MoQ [{req_type}] request for "
+            f"round={round_id} part={part_idx} to peer {peer_id}"
+        )
+        await self._peer.send_to_peer(peer_id=peer_id, message=raw_payload, moq_header=req_hdr)
+

@@ -121,6 +121,47 @@ class MoQCache:
             self._hits += 1
             return entry
 
+    def find_object(
+        self,
+        round_id: int,
+        part_idx: int,
+        origin_node_id: Optional[int] = None,
+        track_name: str = "weights",
+    ) -> Optional[MoQCacheEntry]:
+        """
+        Find a cached object by round (group_id) and chunk (object_id).
+        Used to respond to resend requests and parameter fetch requests.
+
+        If origin_node_id is provided, searches for namespace containing that node.
+        Otherwise, returns the first matching object (e.g. self-published or received).
+        Updates LRU order and hit/miss count.
+        """
+        now = time.time()
+        with self._lock:
+            target_node_str = f"node_{origin_node_id}" if origin_node_id is not None else None
+            for key, entry in list(self._entries.items()):
+                if self._is_expired(entry, now):
+                    self._delete_entry(key)
+                    continue
+
+                hdr = entry.header
+                if hdr.group_id == round_id and hdr.object_id == part_idx:
+                    if track_name and hdr.track_name != track_name:
+                        continue
+                    if target_node_str is not None:
+                        if target_node_str not in hdr.namespace.parts:
+                            continue
+
+                    # Match found! Move to MRU & bump hit
+                    entry.last_accessed = now
+                    entry.access_count += 1
+                    self._entries.move_to_end(key)
+                    self._hits += 1
+                    return entry
+
+            self._misses += 1
+            return None
+
     def put(self, header: MoQHeader, payload: bytes) -> bool:
         """
         Store an object into the cache.

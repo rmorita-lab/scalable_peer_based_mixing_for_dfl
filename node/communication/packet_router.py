@@ -64,6 +64,36 @@ class PacketRouter:
                     f"(hits={get_moq_cache().stats()['hits']})"
                 )
 
+            # Direct MoQ parameter fetch / resend request handling
+            if moq_header.track_name in ("fetch", "resend"):
+                is_resend = (moq_header.track_name == "resend")
+                round_id = moq_header.group_id
+                part_idx = moq_header.object_id
+                origin_node_id = None
+                try:
+                    from communication.packages import deserialize_msg, PackageType
+                    req_pkg = deserialize_msg(data)
+                    if isinstance(req_pkg, dict) and req_pkg.get("type") == PackageType.FETCH_REQUEST:
+                        round_id = req_pkg.get("round", round_id)
+                        part_idx = req_pkg.get("part_idx", part_idx)
+                        origin_node_id = req_pkg.get("origin_node_id")
+                        is_resend = req_pkg.get("is_resend", is_resend)
+                except Exception:
+                    pass
+
+                logging.info(
+                    f"PacketRouter: Direct MoQ {'resend' if is_resend else 'fetch'} request from peer {peer_id} "
+                    f"for round={round_id} part={part_idx}"
+                )
+                await self._sphinx_transport.respond_from_cache(
+                    peer_id=peer_id,
+                    round_id=round_id,
+                    part_idx=part_idx,
+                    origin_node_id=origin_node_id,
+                    is_resend=is_resend,
+                )
+                return
+
         try:
             routing, header, delta, mac_key = await self._sphinx_router.process_incoming(data)
         except Exception as e:
@@ -71,19 +101,19 @@ class PacketRouter:
             return
 
         try:
-            await self._handle_routing_decision(routing, header, delta, mac_key)
+            await self._handle_routing_decision(routing, header, delta, mac_key, peer_id=peer_id)
         except Exception as e:
             logging.exception(f"PacketRouter: Error handling routing decision from peer {peer_id}: {e}")
 
     @log_exceptions
-    async def _handle_routing_decision(self, routing, header, delta, mac_key) -> None:
+    async def _handle_routing_decision(self, routing, header, delta, mac_key, peer_id: int = -1) -> None:
         flag = routing[0]
 
         if flag == Relay_flag:
             await self._handle_relay(routing, header, delta)
 
         elif flag == Dest_flag:
-            await self._handle_destination(delta, mac_key)
+            await self._handle_destination(delta, mac_key, peer_id=peer_id)
 
         elif flag == Surb_flag:
             await self._handle_surb(routing, delta)
@@ -97,7 +127,7 @@ class PacketRouter:
 
         await self._sphinx_transport.on_forward_packet(next_hop=next_hop, packet_data=msg)
 
-    async def _handle_destination(self, delta, mac_key) -> None:
+    async def _handle_destination(self, delta, mac_key, peer_id: int = -1) -> None:
         _, payload_data = receive_forward(self._params, mac_key, delta)
         nymtuple, payload = payload_data
 
@@ -110,6 +140,25 @@ class PacketRouter:
 
         if package_type == PackageType.PROBE:
             metrics().increment(MetricField.PROBES_RECEIVED)
+            await self._sphinx_transport.on_surb_reply_needed(nymtuple=nymtuple)
+            return
+
+        if package_type == PackageType.FETCH_REQUEST:
+            round_id = fragment.get("round", 0)
+            part_idx = fragment.get("part_idx", 0)
+            origin_node_id = fragment.get("origin_node_id")
+            is_resend = fragment.get("is_resend", False)
+            logging.info(
+                f"PacketRouter: Destination FETCH_REQUEST received: round={round_id} "
+                f"part={part_idx} is_resend={is_resend} from peer {peer_id}"
+            )
+            await self._sphinx_transport.respond_from_cache(
+                peer_id=peer_id,
+                round_id=round_id,
+                part_idx=part_idx,
+                origin_node_id=origin_node_id,
+                is_resend=is_resend,
+            )
             await self._sphinx_transport.on_surb_reply_needed(nymtuple=nymtuple)
             return
 

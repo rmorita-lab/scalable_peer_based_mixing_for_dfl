@@ -41,10 +41,28 @@ class PacketRouter:
         metrics().increment(MetricField.TOTAL_MSG_RECEIVED)
 
         if moq_header is not None:
-            logging.debug(
+            if not hasattr(self, "_moq_log_count"):
+                self._moq_log_count = 0
+            self._moq_log_count += 1
+            log_msg = (
                 f"PacketRouter: Received packet with MoQ prefix: {moq_header.namespace} "
                 f"track={moq_header.track_name} group={moq_header.group_id} obj={moq_header.object_id}"
             )
+            if self._moq_log_count <= 20 or self._moq_log_count % 50 == 0:
+                logging.info(log_msg)
+            else:
+                logging.debug(log_msg)
+
+            # MoQ Cache lookup & deduplication
+            from communication.moq import get_moq_cache
+
+            is_dup, _ = get_moq_cache().check_and_put(moq_header, data)
+            if is_dup:
+                metrics().increment(MetricField.RECEIVED_DUPLICATE_MSG)
+                logging.debug(
+                    f"PacketRouter: MoQ Cache HIT for {moq_header.cache_key()} "
+                    f"(hits={get_moq_cache().stats()['hits']})"
+                )
 
         try:
             routing, header, delta, mac_key = await self._sphinx_router.process_incoming(data)

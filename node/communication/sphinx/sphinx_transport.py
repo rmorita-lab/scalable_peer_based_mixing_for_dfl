@@ -190,7 +190,7 @@ class SphinxTransport:
             )
             moq_hdr = None
             if ConfigStore.moq_enabled:
-                from communication.moq import create_dfl_header
+                from communication.moq import create_dfl_header, get_moq_cache
 
                 moq_hdr = create_dfl_header(
                     node_id=self._node_id,
@@ -199,6 +199,7 @@ class SphinxTransport:
                     chunk_idx=chunk_idx,
                     payload_length=len(msg_bytes),
                 )
+                get_moq_cache().put(moq_hdr, msg_bytes)
             update_metrics_task = partial(metrics().increment, MetricField.FRAGMENTS_SENT)
             send_msg_task = partial(self.send, path, msg_bytes, timestamp_callback, moq_header=moq_hdr)
             await self._mixer.queue_item(send_msg_task, update_metrics_task, next_hop=path[0])

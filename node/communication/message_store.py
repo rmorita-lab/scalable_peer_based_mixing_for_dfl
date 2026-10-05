@@ -3,6 +3,7 @@ import logging
 from collections import deque
 
 from metrics.node_metrics import metrics, MetricField
+from utils.config_store import ConfigStore
 from utils.exception_decorator import log_exceptions
 
 DEDUP_WINDOW_SIZE = 10_000
@@ -42,6 +43,13 @@ class MessageStore:
     def set_current_round(self, round_id: int) -> None:
         self._current_round = round_id
         self._last_logged_received = -1
+        if ConfigStore.moq_enabled and round_id > 1:
+            try:
+                from communication.moq import get_moq_cache
+
+                get_moq_cache().purge_round(round_id - 1)
+            except Exception as e:
+                logging.debug(f"MessageStore: MoQ cache purge failed: {e}")
 
     def enqueue_incoming(self, fragment: dict, round_id: int) -> None:
         if round_id < self._current_round:
@@ -73,6 +81,13 @@ class MessageStore:
         stale_rounds = [r for r in self._incoming if r < round_id]
         for r in stale_rounds:
             del self._incoming[r]
+        if ConfigStore.moq_enabled:
+            try:
+                from communication.moq import get_moq_cache
+
+                get_moq_cache().purge_round(round_id)
+            except Exception as e:
+                logging.debug(f"MessageStore: MoQ cache purge failed: {e}")
         return len(stale_rounds)
 
     def record_rtt(self, rtt: float) -> None:

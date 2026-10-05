@@ -1,4 +1,5 @@
 import logging
+import os
 
 from utils.exception_decorator import log_exceptions
 
@@ -27,7 +28,9 @@ def setup_logging(node_id):
     root = logging.getLogger()
     root.handlers = []
     root.addHandler(handler)
-    root.setLevel(logging.INFO)
+    log_level_name = os.environ.get("LOG_LEVEL", "INFO").upper()
+    log_level = getattr(logging, log_level_name, logging.INFO)
+    root.setLevel(log_level)
 
     logging.getLogger("quic").setLevel(logging.WARNING)
     logging.getLogger("aioquic").setLevel(logging.WARNING)
